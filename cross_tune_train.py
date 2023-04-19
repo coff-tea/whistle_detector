@@ -1,3 +1,7 @@
+"""
+From https://github.com/coff-tea/whistle_detector
+""" 
+
 import sys
 import random
 
@@ -32,7 +36,7 @@ parser.add_argument("-r", "--retrain", type=str, default="", dest="r", required=
 parser.add_argument("-p", "--partial", type=float, default=1.0, dest="p", required=False, help="If using only part of a dataset for training.")
 parser.add_argument("-l", "--longer", type=int, default=1, dest="l", required=False, help="Use a multiplier for stop_after time if using partial dataset.")
 args = parser.parse_args()
-paras = json.load(open("Helpers/cross_tune_train.json", "r"))
+paras = json.load(open("Helpers/cross_tune_train.json", "r"))   # Stores relevant information for data, folder system, training process, etc.
 
 
 #===============================================================================================
@@ -65,7 +69,7 @@ elif args.data_format == "stkwavg":
         exit()
 #--------- Set stopping condition value
 stop_after = paras["stop_after"]    
-if args.model_name == "simple":
+if args.model_name == "simple":     # Simple model requires more training to converge
     stop_after *= 2
 elif args.mode != "train":
     stop_after /= 2
@@ -74,7 +78,7 @@ if args.f > 0:
     save_name = "{}-{:d}-{:d}_{}_{}_{}".format(paras["save_spec"], paras["seed"], args.f, args.mode, args.model_name, args.data_format)
 else:
     save_name = "{}-{:d}_{}_{}_{}".format(paras["save_spec"], paras["seed"], args.mode, args.model_name, args.data_format)
-print("Working on {}".format(save_name))
+print("Working on {}".format(save_name))        # Print save_name
 if args.g:
     print("\tUse GAP model")
 if args.o:
@@ -84,7 +88,7 @@ pretrained = not args.o
 
 #===============================================================================================
 #### Load data ####
-if "tf" in args.model_name or args.tf:
+if "tf" in args.model_name or args.tf:      # Using Add-Pre (https://arxiv.org/abs/2211.15406)
     X_pos = []
     if paras["channels"] == 1:
         X_pos.append(spec_data.load_data_tf(np.load("{}/{}_Xpos.npy".format(paras["data_folder"], paras["data_spec"]))))
@@ -97,7 +101,7 @@ if "tf" in args.model_name or args.tf:
     else:
         for ch in range(paras["channels"]):
             X_neg.append(spec_data.load_data_tf(np.load("{}/{}_X{:d}neg.npy".format(paras["data_folder"], paras["data_spec"], ch+1))))
-else:
+else:       # Using Min-Pre
     X_pos = []
     if paras["channels"] == 1:
         X_pos.append(spec_data.load_data(np.load("{}/{}_Xpos.npy".format(paras["data_folder"], paras["data_spec"]))))
@@ -112,7 +116,7 @@ else:
             X_neg.append(spec_data.load_data(np.load("{}/{}_X{:d}neg.npy".format(paras["data_folder"], paras["data_spec"], ch+1))))
             
 idx_dict = dict()
-if args.mode == "cross":        # Fold boundaries
+if args.mode == "cross":        # Fold boundaries for k-cross validation
     # Positive indices
     fold_size = round(len(X_pos[0])/args.k)
     fold_bounds = []
@@ -133,6 +137,11 @@ else:       # Which indices to use for which set
 
 
 #===============================================================================================
+#### FUNCTION: train_epoch ####
+# Train through batches in a dataloader using global parameters of the file. Returns tuple of
+# epoch results (loss, accuracy (%), false alarm (%), missed detection (%)).
+# PARAMETERS
+#   - dataloader (torch.utils.data.DataLoader object)
 def train_epoch(dataloader):
     global model
     global opt
@@ -168,6 +177,11 @@ def train_epoch(dataloader):
 
 
 #===============================================================================================
+#### FUNCTION: eval_dataloader ####
+# Evaluate batches in a dataloader using global parameters of the file. Returns tuple of epoch 
+# results (loss, accuracy (%), false alarm (%), missed detection (%)).
+# PARAMETERS
+#   - dataloader (torch.utils.data.DataLoader object)
 def eval_dataloader(dataloader):
     global model
     global crit
@@ -208,7 +222,7 @@ def eval_dataloader(dataloader):
 #### K-FOLDS CROSSVALIDATION ####
 if args.mode == "cross":
     #--------- Dictionaries to retain values, keyed with k# (fold)
-    try:
+    try:        # Try finding in "results_folder"
         cv_perf = np.load("{}/{}.npy".format(paras["results_folder"], save_name), allow_pickle=True).item()
     except:
         cv_perf = dict()
@@ -303,7 +317,7 @@ if args.mode == "cross":
 #### HYPERPARAMETER TUNING ####
 if args.mode == "tune":
     #------------------ Dictionaries to retain best hyperparameters, keyed by val_accuracy
-    try:
+    try:        # Try finding in "results_folder" 
         hyp_perf = np.load("{}/{}.npy".format(paras["results_folder"], save_name), allow_pickle=True).item()
     except:
         hyp_perf = dict()
