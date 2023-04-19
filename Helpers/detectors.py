@@ -1,10 +1,16 @@
+"""
+From https://github.com/coff-tea/whistle_detector
+""" 
+
+
 import math
 import torch
 import torch.nn as nn
 import torchvision.models as models
 
 
-
+#===============================================================================================
+# Simple convolution network used as a detection, with specifications given about number of layers as input
 class SimpleDetector(nn.Module):
     def __init__(self, chs_in, dim_in, dropout, filter_num, filter_size, nodes, gap, classes=1):
         super(SimpleDetector, self).__init__()
@@ -40,17 +46,31 @@ class SimpleDetector(nn.Module):
 
 
 
+#===============================================================================================
+#### FUNCTION: make_detector ####
+# Create and return an image-classification oriented model.
+# PARAMETERS
+# ... Required
+#   - model_name (dictates the type of model)
+#   - chs_in (channels in the input image)
+#   - dim_in (DxD shape of input image)
+# ... Default given
+#   - freeze (freeze model parameters up to a certain point, model-dependent, only for some models)
+#            [default freezes nothing]
+#   - gap (replace final layer with global average pooling, only for some models)
+#         [default FALSE]
+#   - dropout (dropout probability where necessary)
+#             [default 0.5]
+#   - rgb_sel (choose one of the RGB channel's pre-trained parameters to replicate)
+#             [default R (red)]
+#   - classes (number of classes to output)
+#             [default 1 (detector rather than classifier)]
+#   - pre (used pretrained parameters for pretrained models rather than random)
+#         [default TRUE]
 def make_detector(model_name, chs_in, dim_in, freeze=0, gap=False, dropout=0.5, rgb_sel=0, classes=1, pre=True):
-    """Create and return an image-classification oriented model."""
     model = None
-    ####### SIMPLE MODEL
-    if model_name == "simple":
-        filter_num = [16, 32, 64, 64, 64]
-        filter_size = [3, 3, 3, 3, 3]
-        nodes = [256, 64, 16]
-        model = SimpleDetector(chs_in, dim_in, dropout, filter_num, filter_size, nodes, gap, classes=classes)
-    ####### VGG16 REPRODUCE
-    elif model_name == "vgg16tf":
+    ####### VGG16 REPRODUCE FROM https://arxiv.org/abs/2211.15406
+    if model_name == "vgg16tf":
         if pre:
             model = models.vgg16(weights=models.VGG16_Weights.DEFAULT)
         else:
@@ -74,6 +94,12 @@ def make_detector(model_name, chs_in, dim_in, freeze=0, gap=False, dropout=0.5, 
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(20, classes))
+    ####### SIMPLE MODEL
+    elif model_name == "simple":
+        filter_num = [16, 32, 64, 64, 64]
+        filter_size = [3, 3, 3, 3, 3]
+        nodes = [256, 64, 16]
+        model = SimpleDetector(chs_in, dim_in, dropout, filter_num, filter_size, nodes, gap, classes=classes)
     ####### VGG MODELS (16, 16_bn, 19, 19_bn)
     elif "vgg" in model_name:
         if model_name == "vgg16":
