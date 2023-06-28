@@ -1,4 +1,4 @@
-save_name: jan31
+save_name: BASE
 folders:
   data: Data
   results: Results
@@ -15,7 +15,8 @@ training:
   print_status: 10
   batch_size: 32
   train_split: 0.8
-  tune_trials: 10
+  tune_trials: 2
+  max_tune: 30
   k_folds: 5
   improve_margin: 0.001
 replicable: True
