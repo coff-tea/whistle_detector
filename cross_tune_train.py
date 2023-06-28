@@ -37,7 +37,6 @@ parser.add_argument("-f", "--freeze", type=int, default=0, dest="f", required=Fa
 parser.add_argument("-o", action="store_true",  help="Do not use pretrained model. [DEFAULT: %(default)s]")
 parser.add_argument("-r", "--retrain", type=str, default="", dest="r", required=False, help="If retraining a saved model, provide the model name. [DEFAULT: %(default)s]")
 # Misc. arguments
-parser.add_argument("-hyp", type=str, default="cross_tune_train", dest="hyp", required=False, help="Name of npy file storing hyperparameters. [DEFAULT: %(default)s]")
 parser.add_argument("-y", "--yaml", type=str, default="cross_tune_train", dest="y", required=False, help="Name of yaml file storing relevant information. [DEFAULT: %(default)s]")
 
 args = parser.parse_args()
@@ -61,17 +60,19 @@ pretrained = not args.o
 stop_after = yaml['training']['stop_after'] 
 if args.model_name == "simple":     # Simple model requires more training to converge
     stop_after *= 2
-elif args.mode != "train":      # Stop earlier for cross/tune modes for time
+elif args.mode == "cross":      # Stop earlier for cross mode for time
     stop_after /= 2
 stop_after = int(stop_after)
 #--------- Make and print saving name for this trial
 save_name = f"{yaml['save_name']}"
 if yaml['replicable']:
-    save_name += f"-{yaml['seed']}"
-if args.f > 0:
-    save_name += f"-{args.f}"
-save_name += "_{args.mode}_{args.model_name}_{args.data_format}"
-print(f"Working on {save_name}")        # Print save_name
+    save_name += f"_{yaml['seed']}"
+if args.a:
+    save_name += f"_{args.mode}_{args.model_name}_addpre_{args.data_format}"
+else:
+    save_name += f"_{args.mode}_{args.model_name}_minpre_{args.data_format}"
+print(f"Working on {save_name}!")        # Print save_name
+print("===============================================================================================")
 
 
 #===============================================================================================
@@ -101,7 +102,7 @@ else:       # Using Min-Pre
         for ch in range(yaml['data']['channels']):
             X_neg.append(spec_data.load_data(np.load(f"{yaml['folders']['data']}/{yaml['data']['prefix']}_X{ch+1}neg.npy")))
 num_pos = len(X_pos[0])
-num_neg = num_neg        
+num_neg = len(X_neg[0])        
 
 #===============================================================================================
 #### Dictionary for relevant indices ####            
@@ -289,7 +290,7 @@ if args.mode == "cross":
                 stopped_epoch = epoch
                 break
             if (epoch+1) % yaml['training']['print_status'] == 0:
-                print(f"\t\t\tOn epoch {epoch+1}")
+                print(f"\t\t\tOn epoch {epoch+1}: {best_tloss:.4f}")
         #------------------ Get test performance
         model.load_state_dict(torch.load(f"{yaml['folders']['temp']}/best.pt"))
         test_loss, test_acc, test_fa, test_md = eval_dataloader(testloader)
@@ -300,17 +301,27 @@ if args.mode == "cross":
         iter_dict["loss"] = train_losses
         iter_dict["perf"] = (best_tloss, best_tacc, best_at, test_loss, test_acc, test_fa, test_md)
         cv_perf[d_key] = iter_dict
-        np.save(f"{yaml['folders']['results']}/{save_name}", cv_perf, allow_pickle=True)
+        np.save(f"{yaml['folders']['results']}/{save_name}.npy", cv_perf, allow_pickle=True)
 
 
 #===============================================================================================
 #### HYPERPARAMETER TUNING ####
 if args.mode == "tune":
+    distr_ranges = {"dropout": (0.1, 0.9), "pos": (1, 3) , "lr": (1e-7, 1e-1), "decay": (1e-10, 1e-3), "beta1": (0.25, 0.99), "beta2": (0.25, 0.99)}
+    distr_dict = {"pos": optuna.distributions.FloatDistribution(distr_ranges["pos"][0], distr_ranges["pos"][1]), \
+                 "lr": optuna.distributions.FloatDistribution(distr_ranges["lr"][0], distr_ranges["lr"][1]), \
+                 "decay": optuna.distributions.FloatDistribution(distr_ranges["decay"][0], distr_ranges["decay"][1]), \
+                 "beta1": optuna.distributions.FloatDistribution(distr_ranges["beta1"][0], distr_ranges["beta1"][1]), \
+                 "beta2": optuna.distributions.FloatDistribution(distr_ranges["beta2"][0], distr_ranges["beta2"][1])}   
+    if "simple" in args.model_name or "tfd" in args.model_name:
+        distr_dict["dropout"] = optuna.distributions.FloatDistribution(distr_ranges["dropout"][0], distr_ranges["dropout"][1])
     #------------------ Dictionaries to retain best hyperparameters, keyed by val_accuracy
     try:        # Try finding in "results_folder" 
         hyp_perf = np.load(f"{yaml['folders']['results']}/{save_name}.npy", allow_pickle=True).item()
     except:
         hyp_perf = dict()
+    if len(hyp_perf.keys()) >= yaml['training']['max_tune']:
+        exit()
     #------------------ Make dataloaders
     if args.a:
         train_data = spec_data.process_data_tf(X_pos, idx_dict["pos"][0], model_channels, yaml['data']['dim'], tag=1)
@@ -338,17 +349,17 @@ if args.mode == "tune":
         global valloader
         #------------------ Create model, criterion, and optimiser
         if "simple" in args.model_name or "tfd" in args.model_name:
-            dropout = trial.suggest_float("dropout", 0.25, 0.8, log=True)
+            dropout = trial.suggest_float("dropout", distr_ranges["dropout"][0], distr_ranges["dropout"][1], log=True)
             model = detectors.make_detector(args.model_name, chs_in, yaml['data']['dim'], freeze=args.f, gap=args.g, dropout=dropout, pre=pretrained)
         else:
             model = detectors.make_detector(args.model_name, chs_in, yaml['data']['dim'], freeze=args.f, gap=args.g, pre=pretrained)
         model.to(device)
-        class_weights[0] = trial.suggest_float("pos", 1, 3, log=True)
+        class_weights[0] = trial.suggest_float("pos", distr_ranges["pos"][0], distr_ranges["pos"][1], log=True)
         crit = nn.BCEWithLogitsLoss(pos_weight=class_weights.to(device))
-        lr = trial.suggest_float("lr", 1e-6, 1e-2, log=True)
-        decay = trial.suggest_float("decay", 1e-10, lr, log=True)
-        beta1 = trial.suggest_float("beta1", 0.5, 0.99, log=True)
-        beta2 = trial.suggest_float("beta2", 0.5, 0.99, log=True)
+        lr = trial.suggest_float("lr", distr_ranges["lr"][0], distr_ranges["lr"][1], log=True)
+        decay = trial.suggest_float("decay", distr_ranges["decay"][0], distr_ranges["decay"][1], log=True)
+        beta1 = trial.suggest_float("beta1", distr_ranges["beta1"][0], distr_ranges["beta1"][1], log=True)
+        beta2 = trial.suggest_float("beta2", distr_ranges["beta2"][0], distr_ranges["beta2"][1], log=True)
         opt = optim.Adam(model.parameters(), lr=lr, betas=(beta1, beta2), weight_decay=decay)
         #------------------ Start training
         no_change = 0
@@ -368,7 +379,7 @@ if args.mode == "tune":
             if no_change >= stop_after:
                 break
             if (epoch+1) % yaml['training']['print_status'] == 0:
-                print(f"\t\t\tOn epoch {epoch+1}")
+                print(f"\t\t\tOn epoch {epoch+1}: {best_vloss:.4f}")
         return best_vloss
     #------------------ Tune model
     study = optuna.create_study(direction="minimize", study_name=save_name)
@@ -383,38 +394,42 @@ if args.mode == "tune":
         start_point["pos"] = yaml['defaults']['pos']
         study.enqueue_trial(start_point)
     else:       # Queue up best result from last run
-        latest = 0
-        key = ""
-        for k in hyp_perf.keys():
-            parts = k.split("-")
-            if int(parts[0]) % 2 == 0 and int(parts[0]) > latest:
-                key = k
-        print(f"\t\tUse parameters from: {key}")
-        study.enqueue_trial(hyp_perf[key])
+        for k, v in hyp_perf.items():
+            params = {name: chosen for name, chosen in v.items() if name != "trial_value"}
+            trial = optuna.trial.create_trial(params=params, distributions=distr_dict, value=v["trial_value"])
+            study.add_trial(trial)
+    print(f"Number of trials done is {len(study.trials)}")
     study.optimize(lambda trial:objective(trial, args.model_name, model_channels, yaml['data']['dim'], int(yaml['training']['max_epochs']/2)), \
                                           n_trials=yaml['training']['tune_trials'], gc_after_trial=True)
-    complete_trials = study.get_trials(deepcopy=False, states=[optuna.trial.TrialState.COMPLETE])
-    first_trial = dict()
-    for key, value in complete_trials[0].params.items():    # Save starting point
-        first_trial[key] = value
-    hyp_perf[f"{len(hyp_perf)+1}-{complete_trials[0].value:.4f}"] = first_trial
-    best_trial = dict()
-    for key, value in study.best_trial.params.items():      # Save best result
-        best_trial[key] = value
-    hyp_perf[f"{len(hyp_perf)+1}-{study.best_trial.value:.4f}"] = best_trial
-    np.save(f"{yaml['folders']['results']}/{save_name}.npy", hyp_perf, allow_pickle=True)
+    count = 1
+    new_hyp = dict()
+    for t in study.trials:
+        trial_dict = dict()
+        trial_dict["trial_value"] = t.value
+        for k, v in t.params.items():
+            trial_dict[k] = v 
+        new_hyp[count] = trial_dict 
+        count += 1
+    np.save(f"{yaml['folders']['results']}/{save_name}.npy", new_hyp, allow_pickle=True)
 
 
 #===============================================================================================
 #### MODEL TRAINING ####
 if args.mode == "train":
-    best_paras = np.load(f"Helpers/{args.hyp}.npy", allow_pickle=True).item()
-    if args.model_name not in best_paras.keys():
-        hyper = [{"dropout": 0.5, "pos": 2, "lr": 2e-4, "decay": 1e-6, "beta1": 0.9, "beta2": 0.99}]
-        print(f"\tNo best set of hyp found for model type {args.model_name}")
-    else:   
-        hyper = best_paras[args.model_name]
-        print(f"\tTraining {args.model_name} with {len(hyper)} best parameter sets")
+    hyp_name = save_name.replace("train", "tune")
+    try:
+        hyp_perf = np.load(f"Helpers/{hyp_name}.npy", allow_pickle=True).item()
+        best_set = 10000
+        best_key = 0
+        for k, v in hyp_perf.items():
+            if v["trial_value"] < best_set:
+                best_set = v["trial_value"]
+                best_key = k
+        hyper = hyp_perf[best_key]
+        print(f"\tFound {hyper_name}! Best at {best_key}: {best_set}!")
+    except:
+        hyper = yaml["defaults"]
+        print("\tTraining using default hyperparameters!")
     #------------------ Cut down training set
     if args.p > 0 and args.p < 1:
         pos_train, _ = tuple(spec_data.split_sets(len(idx_dict["pos"][0]), [args.p], seed=yaml['seed']))
@@ -454,62 +469,60 @@ if args.mode == "train":
     valloader = torch.utils.data.DataLoader(val_data, shuffle=False, batch_size=yaml['training']['batch_size'])
     del val_data
     #------------------ Start training
-    for h in range(len(hyper)):
-        if "simple" in args.model_name or "tfd" in args.model_name:
-            model = detectors.make_detector(args.model_name, model_channels, yaml['data']['dim'], freeze=args.f, gap=args.g, dropout=hyper[h]["dropout"], pre=pretrained)
+    if "simple" in args.model_name or "tfd" in args.model_name:
+        model = detectors.make_detector(args.model_name, model_channels, yaml['data']['dim'], freeze=args.f, gap=args.g, dropout=hyper["dropout"], pre=pretrained)
+    else:
+        model = detectors.make_detector(args.model_name, model_channels, yaml['data']['dim'], freeze=args.f, gap=args.g, pre=pretrained)
+    model.to(device)
+    if args.r != "":
+        model.load_state_dict(torch.load(f"{yaml['folders']['models']}/{args.r}"))
+    torch.save(model.state_dict(), f"{yaml['folders']['temp']}/best.pt")
+    class_weights[0] = hyper["pos"]
+    crit = nn.BCEWithLogitsLoss(pos_weight=class_weights.to(device))
+    opt = optim.Adam(model.parameters(), lr=hyper["lr"], betas=(hyper["beta1"], hyper["beta2"]), \
+                     weight_decay=hyper["decay"])
+    train_losses = []
+    train_accs = []
+    val_losses = []
+    val_accs = []
+    no_change = 0
+    best_vloss, best_vacc, _, _ = eval_dataloader(valloader)
+    best_at = 0
+    stopped_epoch = yaml['training']['max_epochs']
+    for epoch in range(yaml['training']['max_epochs']):
+        ept_loss, ept_acc, _, _ = train_epoch(trainloader)
+        epv_loss, epv_acc, _, _ = eval_dataloader(valloader)
+        if epv_loss + yaml['training']['improve_margin'] < best_vloss:
+            best_vloss = epv_loss
+            best_vacc = epv_acc
+            best_at = epoch+1
+            torch.save(model.state_dict(), f"{yaml['folders']['temp']}/best.pt")
+            no_change = 0
         else:
-            model = detectors.make_detector(args.model_name, model_channels, yaml['data']['dim'], freeze=args.f, gap=args.g, pre=pretrained)
-        model.to(device)
-        if args.r != "":
-            model.load_state_dict(torch.load(f"{yaml['folders']['models']}/{args.r}"))
-        torch.save(model.state_dict(), f"{yaml['folders']['temp']}/best.pt")
-        class_weights[0] = hyper[h]["pos"]
-        crit = nn.BCEWithLogitsLoss(pos_weight=class_weights.to(device))
-        opt = optim.Adam(model.parameters(), lr=hyper[h]["lr"], betas=(hyper[h]["beta1"], hyper[h]["beta2"]), \
-                         weight_decay=hyper[h]["decay"])
-        train_losses = []
-        train_accs = []
-        val_losses = []
-        val_accs = []
-        no_change = 0
-        best_vloss, best_vacc, _, _ = eval_dataloader(valloader)
-        best_at = 0
-        stopped_epoch = yaml['training']['max_epochs']
-        for epoch in range(yaml['training']['max_epochs']):
-            ept_loss, ept_acc, _, _ = train_epoch(trainloader)
-            epv_loss, epv_acc, _, _ = eval_dataloader(valloader)
-            if epv_loss + yaml['training']['improve_margin'] < best_vloss:
-                best_vloss = epv_loss
-                best_vacc = epv_acc
-                best_at = epoch+1
-                torch.save(model.state_dict(), f"{yaml['folders']['temp']}/best.pt")
-                no_change = 0
-            else:
-                no_change += 1
-            train_losses.append(ept_loss)
-            train_accs.append(ept_acc)
-            val_losses.append(epv_loss)
-            val_accs.append(epv_acc)
-            if no_change >= stop_after:
-                stopped_epoch = epoch
-                break
-            if (epoch+1) % yaml['training']['print_status'] == 0:
-                print(f"\t\t\tOn epoch {epoch+1}, best is {best_vloss:.4f} in epoch {best_at}")
-        #==================== SAVE RESULTS
-        train_perf = dict()
-        model.load_state_dict(torch.load(f"{yaml['folders']['temp']}/best.pt"))
-        test_loss, test_acc, test_fa, test_md = eval_dataloader(testloader)
-        print("\tTest results: ", test_loss, test_acc)
-        if args.p > 0 and args.p < 1:
-            train_perf["percent"] = args.p
-            train_perf["longer"] = args.l
-        train_perf["hyper"] = hyper[h]
-        train_perf["train_hist"] = (train_losses, train_accs)
-        train_perf["val_hist"] = (val_losses, val_accs)
-        train_perf["best"] = (best_vloss, best_vacc, best_at, stopped_epoch)
-        train_perf["test"] = (test_loss, test_acc, test_fa, test_md)
-        if args.r != "":
-            train_perf["starting"] = args.r
-        this_save = save_name.replace(args.model_name, "{args.model_name}-{h}")
-        np.save(f"{yaml['folders']['results']}/{this_save}", train_perf, allow_pickle=True)
-        torch.save(model.state_dict(), f"{yaml['folders']['models']}/{this_save}.pt")
+            no_change += 1
+        train_losses.append(ept_loss)
+        train_accs.append(ept_acc)
+        val_losses.append(epv_loss)
+        val_accs.append(epv_acc)
+        if no_change >= stop_after:
+            stopped_epoch = epoch
+            break
+        if (epoch+1) % yaml['training']['print_status'] == 0:
+            print(f"\t\t\tOn epoch {epoch+1}, best is {best_vloss:.4f} in epoch {best_at}")
+    #==================== SAVE RESULTS
+    train_perf = dict()
+    model.load_state_dict(torch.load(f"{yaml['folders']['temp']}/best.pt"))
+    test_loss, test_acc, test_fa, test_md = eval_dataloader(testloader)
+    print("\tTest results: ", test_loss, test_acc)
+    if args.p > 0 and args.p < 1:
+        train_perf["percent"] = args.p
+        train_perf["longer"] = args.l
+    train_perf["hyper"] = hyper
+    train_perf["train_hist"] = (train_losses, train_accs)
+    train_perf["val_hist"] = (val_losses, val_accs)
+    train_perf["best"] = (best_vloss, best_vacc, best_at, stopped_epoch)
+    train_perf["test"] = (test_loss, test_acc, test_fa, test_md)
+    if args.r != "":
+        train_perf["starting"] = args.r
+    np.save(f"{yaml['folders']['results']}/{this_save}.npy", train_perf, allow_pickle=True)
+    torch.save(model.state_dict(), f"{yaml['folders']['models']}/{this_save}.pt")
