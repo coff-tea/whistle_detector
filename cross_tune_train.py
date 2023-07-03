@@ -524,5 +524,5 @@ if args.mode == "train":
     train_perf["test"] = (test_loss, test_acc, test_fa, test_md)
     if args.r != "":
         train_perf["starting"] = args.r
-    np.save(f"{yaml['folders']['results']}/{this_save}.npy", train_perf, allow_pickle=True)
-    torch.save(model.state_dict(), f"{yaml['folders']['models']}/{this_save}.pt")
+    np.save(f"{yaml['folders']['results']}/{save_name}.npy", train_perf, allow_pickle=True)
+    torch.save(model.state_dict(), f"{yaml['folders']['models']}/{save_name}.pt")
