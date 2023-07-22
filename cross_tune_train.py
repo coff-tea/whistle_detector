@@ -36,6 +36,7 @@ parser.add_argument("-g", action="store_true",  help="Use global average pooling
 parser.add_argument("-f", "--freeze", type=int, default=0, dest="f", required=False, help="If freezing part of pre-trained layer, only valid with certain model types. [DEFAULT: %(default)s]")
 parser.add_argument("-o", action="store_true",  help="Do not use pretrained model. [DEFAULT: %(default)s]")
 parser.add_argument("-r", "--retrain", type=str, default="", dest="r", required=False, help="If retraining a saved model, provide the model name. [DEFAULT: %(default)s]")
+parser.add_argument("-hy", "--hyper", type=str, default="", dest="hy", required=False, help="If using non-standard naming for hyperparameters, provide the file name. [DEFAULT: %(default)s]")
 # Misc. arguments
 parser.add_argument("-y", "--yaml", type=str, default="cross_tune_train", dest="y", required=False, help="Name of yaml file storing relevant information. [DEFAULT: %(default)s]")
 
@@ -46,18 +47,14 @@ yaml = yaml.safe_load(open(f"Helpers/{args.y}.yaml", "r"))  # Stores relevant in
 #===============================================================================================
 #### General setup ####
 model = None
-model_channels = 1
-if args.data_format == "stk":
-    model_channels = yaml['data']['channels']
-elif args.data_format == "stkwavg":
-    model_channels = yaml['data']['channels']+1
+model_channels = yaml["data"]["mdl_channels"]
 opt = None
 crit = None
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 class_weights = torch.ones(1)
 pretrained = not args.o
 #--------- Set stopping condition value
-stop_after = yaml['training']['stop_after'] 
+stop_after = yaml["training"]["stop_after"] 
 if args.model_name == "simple":     # Simple model requires more training to converge
     stop_after *= 2
 elif args.mode == "cross":      # Stop earlier for cross mode for time
@@ -65,7 +62,7 @@ elif args.mode == "cross":      # Stop earlier for cross mode for time
 stop_after = int(stop_after)
 #--------- Make and print saving name for this trial
 save_name = f"{yaml['save_name']}"
-if yaml['replicable']:
+if yaml["replicable"]:
     save_name += f"_{yaml['seed']}"
 if args.a:
     save_name += f"_{args.mode}_{args.model_name}_addpre_{args.data_format}"
@@ -74,32 +71,31 @@ else:
 print(f"Working on {save_name}!")        # Print save_name
 print("===============================================================================================")
 
-
 #===============================================================================================
 #### Load data ####
 X_pos = []
 X_neg = []
 if args.a:      # Using Add-Pre (https://arxiv.org/abs/2211.15406)
-    if yaml['data']['channels'] == 1:
+    if yaml["data"]["channels"] == 1:
         X_pos.append(spec_data.load_data_tf(np.load(f"{yaml['folders']['data']}/{yaml['data']['prefix']}_Xpos.npy")))
     else:
-        for ch in range(yaml['data']['channels']):
+        for ch in range(yaml["data"]["channels"]):
             X_pos.append(spec_data.load_data_tf(np.load(f"{yaml['folders']['data']}/{yaml['data']['prefix']}_X{ch+1}pos.npy")))
-    if yaml['data']['channels'] == 1:
+    if yaml["data"]["channels"] == 1:
         X_neg.append(spec_data.load_data_tf(np.load(f"{yaml['folders']['data']}/{yaml['data']['prefix']}_Xneg.npy")))
     else:
-        for ch in range(yaml['data']['channels']):
+        for ch in range(yaml["data"]["channels"]):
             X_neg.append(spec_data.load_data_tf(np.load(f"{yaml['folders']['data']}/{yaml['data']['prefix']}_X{ch+1}neg.npy")))
 else:       # Using Min-Pre
-    if yaml['data']['channels'] == 1:
+    if yaml["data"]["channels"] == 1:
         X_pos.append(spec_data.load_data(np.load(f"{yaml['folders']['data']}/{yaml['data']['prefix']}_Xpos.npy")))
     else:
-        for ch in range(yaml['data']['channels']):
+        for ch in range(yaml["data"]["channels"]):
             X_pos.append(spec_data.load_data(np.load(f"{yaml['folders']['data']}/{yaml['data']['prefix']}_X{ch+1}pos.npy")))
-    if yaml['data']['channels'] == 1:
+    if yaml["data"]["channels"] == 1:
         X_neg.append(spec_data.load_data(np.load(f"{yaml['folders']['data']}/{yaml['data']['prefix']}_Xneg.npy")))
     else:
-        for ch in range(yaml['data']['channels']):
+        for ch in range(yaml["data"]["channels"]):
             X_neg.append(spec_data.load_data(np.load(f"{yaml['folders']['data']}/{yaml['data']['prefix']}_X{ch+1}neg.npy")))
 num_pos = len(X_pos[0])
 num_neg = len(X_neg[0])        
@@ -109,22 +105,22 @@ num_neg = len(X_neg[0])
 idx_dict = dict()
 if args.mode == "cross":        # Fold boundaries for k-cross validation
     # Positive indices
-    fold_size = round(num_pos/yaml['training']['k_folds'])
+    fold_size = round(num_pos/yaml["training"]["k_folds"])
     fold_bounds = []
-    for i in range(yaml['training']['k_folds']):
+    for i in range(yaml["training"]["k_folds"]):
         fold_bounds.append(i*fold_size)
     fold_bounds.append(num_pos)
     idx_dict["pos"] = fold_bounds.copy()
     # Positive indices
-    fold_size = round(num_neg/yaml['training']['k_folds'])
+    fold_size = round(num_neg/yaml["training"]["k_folds"])
     fold_bounds = []
-    for i in range(yaml['training']['k_folds']):
+    for i in range(yaml["training"]["k_folds"]):
         fold_bounds.append(i*fold_size)
     fold_bounds.append(num_neg)
     idx_dict["neg"] = fold_bounds.copy()
 else:       # Which indices to use for which set
-    idx_dict["pos"] = tuple(spec_data.split_sets(num_pos, [yaml['training']['train_split'], 0.5], replicable=yaml['replicable'], seed=yaml['seed']))
-    idx_dict["neg"] = tuple(spec_data.split_sets(num_neg, [yaml['training']['train_split'], 0.5], replicable=yaml['replicable'], seed=yaml['seed']+1))
+    idx_dict["pos"] = tuple(spec_data.split_sets(num_pos, [yaml["training"]["train_split"], 0.5], replicable=yaml["replicable"], seed=yaml["seed"]))
+    idx_dict["neg"] = tuple(spec_data.split_sets(num_neg, [yaml["training"]["train_split"], 0.5], replicable=yaml["replicable"], seed=yaml["seed"]+1))
 
 
 #===============================================================================================
@@ -217,21 +213,21 @@ if args.mode == "cross":
         cv_perf = np.load(f"{yaml['folders']['results']}/{save_name}.npy", allow_pickle=True).item()
     except:
         cv_perf = dict()
-        cv_perf["hyper"] = (yaml['defaults']['pos'], yaml['defaults']['dropout'], yaml['defaults']['lr'], \
-                            yaml['defaults']['decay'], yaml['defaults']['beta1'], yaml['defaults']['beta2'])
+        cv_perf["hyper"] = (yaml["defaults"]["pos"], yaml["defaults"]["dropout"], yaml["defaults"]["lr"], \
+                            yaml["defaults"]["decay"], yaml["defaults"]["beta1"], yaml["defaults"]["beta2"])
     folds_done = cv_perf.keys()
     #--------- Prepare to run
-    model = detectors.make_detector(args.model_name, model_channels, yaml['data']['dim'], dropout=yaml['defaults']['dropout'], freeze=args.f, gap=args.g, pre=pretrained)
+    model = detectors.make_detector(args.model_name, model_channels, yaml["data"]["dim"], dropout=yaml["defaults"]["dropout"], freeze=args.f, gap=args.g, pre=pretrained)
     model.to(device)
     torch.save(model.state_dict(), f"{yaml['folders']['temp']}/start.pt")
     pos_idx = [i for i in range(num_pos)]
     neg_idx = [i for i in range(num_neg)]
-    if yaml['replicable']: 
-        random.seed(yaml['seed'])
+    if yaml["replicable"]: 
+        random.seed(yaml["seed"])
     random.shuffle(pos_idx)
     random.shuffle(neg_idx)
     #--------- Iterate through folds
-    for k in range(yaml['training']['k_folds']):
+    for k in range(yaml["training"]["k_folds"]):
         #--------- Make dictionary key
         d_key = f"fold{k+1}"
         if d_key in folds_done:
@@ -241,30 +237,30 @@ if args.mode == "cross":
         #------------------ Set up model, criterion, optimizer
         model.load_state_dict(torch.load(f"{yaml['folders']['temp']}/start.pt"))
         torch.save(model.state_dict(), f"{yaml['folders']['temp']}/best.pt")
-        class_weights[0] = yaml['defaults']['pos']
+        class_weights[0] = yaml["defaults"]["pos"]
         crit = nn.BCEWithLogitsLoss(pos_weight=class_weights.to(device))
-        opt = optim.Adam(model.parameters(), lr=yaml['defaults']['lr'], \
-                         betas=(yaml['defaults']['beta1'], yaml['defaults']['beta2']), weight_decay=yaml['defaults']['decay'])
+        opt = optim.Adam(model.parameters(), lr=yaml["defaults"]["lr"], \
+                         betas=(yaml["defaults"]["beta1"], yaml["defaults"]["beta2"]), weight_decay=yaml["defaults"]["decay"])
         #------------------ Make dataloaders
         pos_test_idx = [i for i in pos_idx[idx_dict["pos"][k]:idx_dict["pos"][k+1]]]
         pos_train_idx = [i for i in pos_idx if i not in pos_test_idx]
         if args.a:
-            test_data = spec_data.process_data_tf(X_pos, pos_test_idx, model_channels, yaml['data']['dim'], tag=1)
-            train_data = spec_data.process_data_tf(X_pos, pos_train_idx, model_channels, yaml['data']['dim'], tag=1)
+            test_data = spec_data.process_data_tf(X_pos, pos_test_idx, model_channels, yaml["data"]["dim"], tag=1)
+            train_data = spec_data.process_data_tf(X_pos, pos_train_idx, model_channels, yaml["data"]["dim"], tag=1)
         else:
-            test_data = spec_data.process_data(X_pos, pos_test_idx, args.data_format, model_channels, yaml['data']['dim'], tag=1, which_ch=args.c)
-            train_data = spec_data.process_data(X_pos, pos_train_idx, args.data_format, model_channels, yaml['data']['dim'], tag=1, which_ch=args.c)
+            test_data = spec_data.process_data(X_pos, pos_test_idx, args.data_format, model_channels, yaml["data"]["dim"], tag=1, which_ch=args.c)
+            train_data = spec_data.process_data(X_pos, pos_train_idx, args.data_format, model_channels, yaml["data"]["dim"], tag=1, which_ch=args.c)
         neg_test_idx = [i for i in neg_idx[idx_dict["neg"][k]:idx_dict["neg"][k+1]]]
         neg_train_idx = [i for i in neg_idx if i not in neg_test_idx]
         if args.a:
-            test_data.extend(spec_data.process_data_tf(X_neg, neg_test_idx, model_channels, yaml['data']['dim'], tag=0))
-            train_data.extend(spec_data.process_data_tf(X_neg, neg_train_idx, model_channels, yaml['data']['dim'], tag=0))
+            test_data.extend(spec_data.process_data_tf(X_neg, neg_test_idx, model_channels, yaml["data"]["dim"], tag=0))
+            train_data.extend(spec_data.process_data_tf(X_neg, neg_train_idx, model_channels, yaml["data"]["dim"], tag=0))
         else:
-            test_data.extend(spec_data.process_data(X_neg, neg_test_idx, args.data_format, model_channels, yaml['data']['dim'], tag=0, which_ch=args.c))
-            train_data.extend(spec_data.process_data(X_neg, neg_train_idx, args.data_format, model_channels, yaml['data']['dim'], tag=0, which_ch=args.c))
-        trainloader = torch.utils.data.DataLoader(train_data, shuffle=True, batch_size=yaml['training']['batch_size'])
+            test_data.extend(spec_data.process_data(X_neg, neg_test_idx, args.data_format, model_channels, yaml["data"]["dim"], tag=0, which_ch=args.c))
+            train_data.extend(spec_data.process_data(X_neg, neg_train_idx, args.data_format, model_channels, yaml["data"]["dim"], tag=0, which_ch=args.c))
+        trainloader = torch.utils.data.DataLoader(train_data, shuffle=True, batch_size=yaml["training"]["batch_size"])
         del train_data
-        testloader = torch.utils.data.DataLoader(test_data, shuffle=False, batch_size=yaml['training']['batch_size'])
+        testloader = torch.utils.data.DataLoader(test_data, shuffle=False, batch_size=yaml["training"]["batch_size"])
         del test_data
         #------------------ Start training
         train_losses = []
@@ -273,10 +269,10 @@ if args.mode == "cross":
         best_tloss = 1000.
         best_tacc = 0.
         best_at = 0
-        stopped_epoch = yaml['training']['max_epochs']
-        for epoch in range(yaml['training']['max_epochs']):
+        stopped_epoch = yaml["training"]["max_epochs"]
+        for epoch in range(yaml["training"]["max_epochs"]):
             ept_loss, ept_acc, _, _ = train_epoch(trainloader)
-            if ept_loss + yaml['training']['improve_margin'] < best_tloss:
+            if ept_loss + yaml["training"]["improve_margin"] < best_tloss:
                 best_tloss = ept_loss
                 best_tacc = ept_acc
                 best_at = epoch
@@ -289,7 +285,7 @@ if args.mode == "cross":
             if no_change >= stop_after:
                 stopped_epoch = epoch
                 break
-            if (epoch+1) % yaml['training']['print_status'] == 0:
+            if (epoch+1) % yaml["training"]["print_status"] == 0:
                 print(f"\t\t\tOn epoch {epoch+1}: {best_tloss:.4f}")
         #------------------ Get test performance
         model.load_state_dict(torch.load(f"{yaml['folders']['temp']}/best.pt"))
@@ -320,24 +316,24 @@ if args.mode == "tune":
         hyp_perf = np.load(f"{yaml['folders']['results']}/{save_name}.npy", allow_pickle=True).item()
     except:
         hyp_perf = dict()
-    if len(hyp_perf.keys()) >= yaml['training']['max_tune']:
+    if len(hyp_perf.keys()) >= yaml["training"]["max_tune"]:
         exit()
     #------------------ Make dataloaders
     if args.a:
-        train_data = spec_data.process_data_tf(X_pos, idx_dict["pos"][0], model_channels, yaml['data']['dim'], tag=1)
-        train_data.extend(spec_data.process_data_tf(X_neg, idx_dict["neg"][0], model_channels, yaml['data']['dim'], tag=0))
+        train_data = spec_data.process_data_tf(X_pos, idx_dict["pos"][0], model_channels, yaml["data"]["dim"], tag=1)
+        train_data.extend(spec_data.process_data_tf(X_neg, idx_dict["neg"][0], model_channels, yaml["data"]["dim"], tag=0))
     else:
-        train_data = spec_data.process_data(X_pos, idx_dict["pos"][0], args.data_format, model_channels, yaml['data']['dim'], tag=1, which_ch=args.c)
-        train_data.extend(spec_data.process_data(X_neg, idx_dict["neg"][0], args.data_format, model_channels, yaml['data']['dim'], tag=0, which_ch=args.c))
-    trainloader = torch.utils.data.DataLoader(train_data, shuffle=True, batch_size=yaml['training']['batch_size'])
+        train_data = spec_data.process_data(X_pos, idx_dict["pos"][0], args.data_format, model_channels, yaml["data"]["dim"], tag=1, which_ch=args.c)
+        train_data.extend(spec_data.process_data(X_neg, idx_dict["neg"][0], args.data_format, model_channels, yaml["data"]["dim"], tag=0, which_ch=args.c))
+    trainloader = torch.utils.data.DataLoader(train_data, shuffle=True, batch_size=yaml["training"]["batch_size"])
     del train_data
     if args.a:
-        val_data = spec_data.process_data_tf(X_pos, idx_dict["pos"][2], model_channels, yaml['data']['dim'], tag=1)
-        val_data.extend(spec_data.process_data_tf(X_neg, idx_dict["neg"][2], model_channels, yaml['data']['dim'], tag=0))
+        val_data = spec_data.process_data_tf(X_pos, idx_dict["pos"][2], model_channels, yaml["data"]["dim"], tag=1)
+        val_data.extend(spec_data.process_data_tf(X_neg, idx_dict["neg"][2], model_channels, yaml["data"]["dim"], tag=0))
     else:
-        val_data = spec_data.process_data(X_pos, idx_dict["pos"][2], args.data_format, model_channels, yaml['data']['dim'], tag=1, which_ch=args.c)
-        val_data.extend(spec_data.process_data(X_neg, idx_dict["neg"][2], args.data_format, model_channels, yaml['data']['dim'], tag=0, which_ch=args.c))
-    valloader = torch.utils.data.DataLoader(val_data, shuffle=False, batch_size=yaml['training']['batch_size'])
+        val_data = spec_data.process_data(X_pos, idx_dict["pos"][2], args.data_format, model_channels, yaml["data"]["dim"], tag=1, which_ch=args.c)
+        val_data.extend(spec_data.process_data(X_neg, idx_dict["neg"][2], args.data_format, model_channels, yaml["data"]["dim"], tag=0, which_ch=args.c))
+    valloader = torch.utils.data.DataLoader(val_data, shuffle=False, batch_size=yaml["training"]["batch_size"])
     del val_data
     #------------------ Objective function
     def objective(trial, model_name, chs_in, spat_dim, max_epochs, prune=True):
@@ -350,9 +346,9 @@ if args.mode == "tune":
         #------------------ Create model, criterion, and optimiser
         if "simple" in args.model_name or "tfd" in args.model_name:
             dropout = trial.suggest_float("dropout", distr_ranges["dropout"][0], distr_ranges["dropout"][1], log=True)
-            model = detectors.make_detector(args.model_name, chs_in, yaml['data']['dim'], freeze=args.f, gap=args.g, dropout=dropout, pre=pretrained)
+            model = detectors.make_detector(args.model_name, chs_in, yaml["data"]["dim"], freeze=args.f, gap=args.g, dropout=dropout, pre=pretrained)
         else:
-            model = detectors.make_detector(args.model_name, chs_in, yaml['data']['dim'], freeze=args.f, gap=args.g, pre=pretrained)
+            model = detectors.make_detector(args.model_name, chs_in, yaml["data"]["dim"], freeze=args.f, gap=args.g, pre=pretrained)
         model.to(device)
         class_weights[0] = trial.suggest_float("pos", distr_ranges["pos"][0], distr_ranges["pos"][1], log=True)
         crit = nn.BCEWithLogitsLoss(pos_weight=class_weights.to(device))
@@ -367,7 +363,7 @@ if args.mode == "tune":
         for epoch in range(max_epochs):
             _, _, _, _ = train_epoch(trainloader)
             epv_loss, _, _, _ = eval_dataloader(valloader)
-            if epv_loss + yaml['training']['improve_margin'] < best_vloss:
+            if epv_loss + yaml["training"]["improve_margin"] < best_vloss:
                 best_vloss = epv_loss
                 torch.save(model.state_dict(), f"{yaml['folders']['temp']}/best.pt")
                 no_change = 0
@@ -378,7 +374,7 @@ if args.mode == "tune":
                 no_change += 1
             if no_change >= stop_after:
                 break
-            if (epoch+1) % yaml['training']['print_status'] == 0:
+            if (epoch+1) % yaml["training"]["print_status"] == 0:
                 print(f"\t\t\tOn epoch {epoch+1}: {best_vloss:.4f}")
         return best_vloss
     #------------------ Tune model
@@ -386,12 +382,12 @@ if args.mode == "tune":
     if len(hyp_perf.keys()) == 0:       # Starting point
         start_point = dict()
         if "simple" in args.model_name or "tfd" in args.model_name:
-            start_point["dropout"] = yaml['defaults']['dropout']
-        start_point["lr"] = yaml['defaults']['lr']
-        start_point["decay"] = yaml['defaults']['decay']
-        start_point["beta1"] = yaml['defaults']['beta1']
-        start_point["beta2"] = yaml['defaults']['beta2']
-        start_point["pos"] = yaml['defaults']['pos']
+            start_point["dropout"] = yaml["defaults"]["dropout"]
+        start_point["lr"] = yaml["defaults"]["lr"]
+        start_point["decay"] = yaml["defaults"]["decay"]
+        start_point["beta1"] = yaml["defaults"]["beta1"]
+        start_point["beta2"] = yaml["defaults"]["beta2"]
+        start_point["pos"] = yaml["defaults"]["pos"]
         study.enqueue_trial(start_point)
     else:       # Queue up best result from last run
         for k, v in hyp_perf.items():
@@ -399,8 +395,8 @@ if args.mode == "tune":
             trial = optuna.trial.create_trial(params=params, distributions=distr_dict, value=v["trial_value"])
             study.add_trial(trial)
     print(f"Number of trials done is {len(study.trials)}")
-    study.optimize(lambda trial:objective(trial, args.model_name, model_channels, yaml['data']['dim'], int(yaml['training']['max_epochs']/2)), \
-                                          n_trials=yaml['training']['tune_trials'], gc_after_trial=True)
+    study.optimize(lambda trial:objective(trial, args.model_name, model_channels, yaml["data"]["dim"], int(yaml["training"]["max_epochs"]/2)), \
+                                          n_trials=yaml["training"]["tune_trials"], gc_after_trial=True)
     count = 1
     new_hyp = dict()
     for t in study.trials:
@@ -416,9 +412,16 @@ if args.mode == "tune":
 #===============================================================================================
 #### MODEL TRAINING ####
 if args.mode == "train":
-    hyp_name = save_name.replace("train", "tune")
+    if args.hy == "":
+        hyp_name = save_name.replace("train", "tune")
+        starter = hyp_name.split("_")[0]
+        if "ver" in starter:
+            new_starter = starter.split("ver")[0]
+            hyp_name = hyp_name.replace(starter, new_starter)
+    else:
+        hyp_name = args.hy
     try:
-        hyp_perf = np.load(f"Helpers/{hyp_name}.npy", allow_pickle=True).item()
+        hyp_perf = np.load(f"Results/{hyp_name}.npy", allow_pickle=True).item()
         best_set = 10000
         best_key = 0
         for k, v in hyp_perf.items():
@@ -426,18 +429,18 @@ if args.mode == "train":
                 best_set = v["trial_value"]
                 best_key = k
         hyper = hyp_perf[best_key]
-        print(f"\tFound {hyper_name}! Best at {best_key}: {best_set}!")
+        print(f"\tFound {hyp_name}! Best at {best_key}: {best_set}!")
     except:
         hyper = yaml["defaults"]
         print("\tTraining using default hyperparameters!")
     #------------------ Cut down training set
     if args.p > 0 and args.p < 1:
-        pos_train, _ = tuple(spec_data.split_sets(len(idx_dict["pos"][0]), [args.p], seed=yaml['seed']))
+        pos_train, _ = tuple(spec_data.split_sets(len(idx_dict["pos"][0]), [args.p], seed=yaml["seed"]))
         pos_list = []
         for i in pos_train:
             pos_list.append(idx_dict["pos"][0][i])
         idx_dict["pos"] = (pos_list, idx_dict["pos"][1], idx_dict["pos"][2])
-        neg_train, _ = tuple(spec_data.split_sets(len(idx_dict["neg"][0]), [args.p], seed=yaml['seed']+1))
+        neg_train, _ = tuple(spec_data.split_sets(len(idx_dict["neg"][0]), [args.p], seed=yaml["seed"]+1))
         neg_list = []
         for i in pos_train:
             neg_list.append(idx_dict["neg"][0][i])
@@ -445,37 +448,37 @@ if args.mode == "train":
         stop_after *= int(args.l)
     #------------------ Make dataloaders
     if args.a:
-        train_data = spec_data.process_data_tf(X_pos, idx_dict["pos"][0], model_channels, yaml['data']['dim'], tag=1)
-        train_data.extend(spec_data.process_data_tf(X_neg, idx_dict["neg"][0], model_channels, yaml['data']['dim'], tag=0))
+        train_data = spec_data.process_data_tf(X_pos, idx_dict["pos"][0], model_channels, yaml["data"]["dim"], tag=1)
+        train_data.extend(spec_data.process_data_tf(X_neg, idx_dict["neg"][0], model_channels, yaml["data"]["dim"], tag=0))
     else:
-        train_data = spec_data.process_data(X_pos, idx_dict["pos"][0], args.data_format, model_channels, yaml['data']['dim'], tag=1, which_ch=args.c)
-        train_data.extend(spec_data.process_data(X_neg, idx_dict["neg"][0], args.data_format, model_channels, yaml['data']['dim'], tag=0, which_ch=args.c))
-    trainloader = torch.utils.data.DataLoader(train_data, shuffle=True, batch_size=yaml['training']['batch_size'])
+        train_data = spec_data.process_data(X_pos, idx_dict["pos"][0], args.data_format, model_channels, yaml["data"]["dim"], tag=1, which_ch=args.c)
+        train_data.extend(spec_data.process_data(X_neg, idx_dict["neg"][0], args.data_format, model_channels, yaml["data"]["dim"], tag=0, which_ch=args.c))
+    trainloader = torch.utils.data.DataLoader(train_data, shuffle=True, batch_size=yaml["training"]["batch_size"])
     del train_data
     if args.a:
-        test_data = spec_data.process_data_tf(X_pos, idx_dict["pos"][1], model_channels, yaml['data']['dim'], tag=1)
-        test_data.extend(spec_data.process_data_tf(X_neg, idx_dict["neg"][1], model_channels, yaml['data']['dim'], tag=0))
+        test_data = spec_data.process_data_tf(X_pos, idx_dict["pos"][1], model_channels, yaml["data"]["dim"], tag=1)
+        test_data.extend(spec_data.process_data_tf(X_neg, idx_dict["neg"][1], model_channels, yaml["data"]["dim"], tag=0))
     else:
-        test_data = spec_data.process_data(X_pos, idx_dict["pos"][1], args.data_format, model_channels, yaml['data']['dim'], tag=1, which_ch=args.c)
-        test_data.extend(spec_data.process_data(X_neg, idx_dict["neg"][1], args.data_format, model_channels, yaml['data']['dim'], tag=0, which_ch=args.c))
-    testloader = torch.utils.data.DataLoader(test_data, shuffle=True, batch_size=yaml['training']['batch_size'])
+        test_data = spec_data.process_data(X_pos, idx_dict["pos"][1], args.data_format, model_channels, yaml["data"]["dim"], tag=1, which_ch=args.c)
+        test_data.extend(spec_data.process_data(X_neg, idx_dict["neg"][1], args.data_format, model_channels, yaml["data"]["dim"], tag=0, which_ch=args.c))
+    testloader = torch.utils.data.DataLoader(test_data, shuffle=True, batch_size=yaml["training"]["batch_size"])
     del test_data
     if args.a:
-        val_data = spec_data.process_data_tf(X_pos, idx_dict["pos"][2], model_channels, yaml['data']['dim'], tag=1)
-        val_data.extend(spec_data.process_data_tf(X_neg, idx_dict["neg"][2], model_channels, yaml['data']['dim'], tag=0))
+        val_data = spec_data.process_data_tf(X_pos, idx_dict["pos"][2], model_channels, yaml["data"]["dim"], tag=1)
+        val_data.extend(spec_data.process_data_tf(X_neg, idx_dict["neg"][2], model_channels, yaml["data"]["dim"], tag=0))
     else:
-        val_data = spec_data.process_data(X_pos, idx_dict["pos"][2], args.data_format, model_channels, yaml['data']['dim'], tag=1, which_ch=args.c)
-        val_data.extend(spec_data.process_data(X_neg, idx_dict["neg"][2], args.data_format, model_channels, yaml['data']['dim'], tag=0, which_ch=args.c))
-    valloader = torch.utils.data.DataLoader(val_data, shuffle=False, batch_size=yaml['training']['batch_size'])
+        val_data = spec_data.process_data(X_pos, idx_dict["pos"][2], args.data_format, model_channels, yaml["data"]["dim"], tag=1, which_ch=args.c)
+        val_data.extend(spec_data.process_data(X_neg, idx_dict["neg"][2], args.data_format, model_channels, yaml["data"]["dim"], tag=0, which_ch=args.c))
+    valloader = torch.utils.data.DataLoader(val_data, shuffle=False, batch_size=yaml["training"]["batch_size"])
     del val_data
     #------------------ Start training
     if "simple" in args.model_name or "tfd" in args.model_name:
-        model = detectors.make_detector(args.model_name, model_channels, yaml['data']['dim'], freeze=args.f, gap=args.g, dropout=hyper["dropout"], pre=pretrained)
+        model = detectors.make_detector(args.model_name, model_channels, yaml["data"]["dim"], freeze=args.f, gap=args.g, dropout=hyper["dropout"], pre=pretrained)
     else:
-        model = detectors.make_detector(args.model_name, model_channels, yaml['data']['dim'], freeze=args.f, gap=args.g, pre=pretrained)
+        model = detectors.make_detector(args.model_name, model_channels, yaml["data"]["dim"], freeze=args.f, gap=args.g, pre=pretrained)
     model.to(device)
     if args.r != "":
-        model.load_state_dict(torch.load(f"{yaml['folders']['models']}/{args.r}"))
+        model.load_state_dict(torch.load(f"{yaml['folders']['models']}/{args.r}.pt"))
     torch.save(model.state_dict(), f"{yaml['folders']['temp']}/best.pt")
     class_weights[0] = hyper["pos"]
     crit = nn.BCEWithLogitsLoss(pos_weight=class_weights.to(device))
@@ -488,11 +491,11 @@ if args.mode == "train":
     no_change = 0
     best_vloss, best_vacc, _, _ = eval_dataloader(valloader)
     best_at = 0
-    stopped_epoch = yaml['training']['max_epochs']
-    for epoch in range(yaml['training']['max_epochs']):
+    stopped_epoch = yaml["training"]["max_epochs"]
+    for epoch in range(yaml["training"]["max_epochs"]):
         ept_loss, ept_acc, _, _ = train_epoch(trainloader)
         epv_loss, epv_acc, _, _ = eval_dataloader(valloader)
-        if epv_loss + yaml['training']['improve_margin'] < best_vloss:
+        if epv_loss + yaml["training"]["improve_margin"] < best_vloss:
             best_vloss = epv_loss
             best_vacc = epv_acc
             best_at = epoch+1
@@ -507,7 +510,7 @@ if args.mode == "train":
         if no_change >= stop_after:
             stopped_epoch = epoch
             break
-        if (epoch+1) % yaml['training']['print_status'] == 0:
+        if (epoch+1) % yaml["training"]["print_status"] == 0:
             print(f"\t\t\tOn epoch {epoch+1}, best is {best_vloss:.4f} in epoch {best_at}")
     #==================== SAVE RESULTS
     train_perf = dict()
